@@ -1,6 +1,6 @@
 # Nanodegree Data Analyst
 
-In this repository you could find all my answers to the Nanodegree Data Analyst course at audacity.
+In this repository you could find all my answers to the Nanodegree Data Analyst course at udacity: https://www.udacity.com/course/data-analyst-nanodegree--nd002
 
 ## P0 - Analyze Chopstick Length
 
