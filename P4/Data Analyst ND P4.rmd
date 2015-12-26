@@ -1,0 +1,520 @@
+---
+title: "Data Analyst ND P4"
+author: "Wilfried Hoge"
+date: "17. Oktober 2015"
+output: html_document
+---
+
+# Taxi Exploration by Wilfried Hoge
+
+The Taxi data used in this exploration was downloaded from 
+http://www.andresmh.com/nyctaxitrips/ and joined with weather data from 
+https://weatherspark.com/. This data set is very large and only a small sample 
+is used here. This sample contains 1% of the data for 4 month 
+(January to April 2013).
+
+```{r echo=FALSE, error=FALSE, warning=FALSE, message=FALSE}
+
+library(ggplot2)
+library(dplyr)
+Sys.setlocale("LC_TIME", "C")
+
+```
+
+
+## General Statistics
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+# my working directory
+setwd("~/Dropbox/udacity")
+
+# read taxi data from csv
+taxi = read.csv("taxi.csv", 
+                colClasses=(c("factor","factor","character","character",
+                              "factor","integer","numeric","numeric","numeric",
+                              "numeric","numeric","factor","numeric","numeric",
+                              "numeric","numeric","numeric","numeric","factor",
+                              "factor","factor","factor","numeric","numeric")))
+
+# build some new variables useful for analysis
+taxi$pickup.date = as.Date(taxi$pickup.datetime)
+taxi$weekday = factor(weekdays(taxi$pickup.date),
+                      level=c("Monday", "Tuesday", "Wednesday", "Thursday", 
+                              "Friday", "Saturday", "Sunday"))
+taxi$weekend = factor(ifelse(taxi$weekday %in% c("Saturday","Sunday"), 
+                             "yes", "no"))
+taxi$rain = factor(ifelse(taxi$Precipitation>0, "yes", "no"))
+taxi$Hour = factor(taxi$Hour, levels=c(0:23))
+
+```
+
+```{r}
+# show the structure of the taxi data
+str(taxi)
+
+# show the factors
+levels(taxi$Vendor)
+levels(taxi$passenger.count)
+levels(taxi$Hour)
+levels(taxi$weekday)
+levels(taxi$weekend)
+levels(taxi$rain)
+
+# remove NAs from the data set
+taxi = na.omit(taxi)
+
+# a summary of the data
+summary(taxi)
+
+```
+
+Most taxi trips are just short. The mean trip distance is below 3 miles. 
+The mean passenger count is 1.7. The median tip is just $1 but the maximum 
+is $110. The mean trip fare is $14.33 and the maximum is $356.
+
+## Simple plots
+
+Looking at the taxi rides per day shows a distribution between 400 and 600. 
+The monday has the lowest number of rides with a median of 450. The highest 
+median of taxi rides is on Friday and Saturday with a higher variance on 
+Saturday.
+There are not many taxi rides when it is raining.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi, aes(x=pickup.date)) + geom_histogram(binwidth=1) +
+  ggtitle("Number of taxi rides per day") + xlab("Date")
+
+taxi.per.day = taxi %>% 
+  group_by(pickup.date) %>% 
+  summarise(count=n(), fare.mean=mean(fare.amount),
+            fare.median=median(fare.amount),
+            weekday=first(weekday))
+
+ggplot(data=taxi.per.day, aes(x=weekday,y=count)) + geom_boxplot() + 
+  ggtitle("Number of taxi rides per weekday")
+
+ggplot(data=taxi, aes(x=rain)) +  geom_histogram() +
+  ggtitle("Number of taxi rides by rain") + xlab("Is it raining?")
+
+```
+
+## Looking at fares
+
+The distribution of fares over days shows that most trips are below $25 
+(the mean is $14.33). But a line above $50 stands out that should be 
+investiged in more detail.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi, aes(x=pickup.date,y=fare.amount)) + 
+  geom_point(alpha=0.1, color="orange", position="jitter") + ylim(0,100) + 
+  geom_line(data=taxi.per.day, (aes(x=pickup.date, 
+                                    y=fare.mean, color="mean"))) +
+  geom_line(data=taxi.per.day, (aes(x=pickup.date, 
+                                    y=fare.median, color="median"))) +
+  ggtitle("Trip fare per day") + xlab("Day") + ylab("Fare") + 
+  scale_colour_manual("Fare", values=c("mean"="blue",
+                                       "median"="red"))
+
+```
+
+Looking at trip fares above $50 we can see that the rate of $52 is very 
+frequent.
+
+```{r}
+
+# subset of taxi trips with fare > 50$
+taxi50 = taxi[taxi$fare.amount > 50,]
+table(taxi50$fare.amount)
+
+```
+
+This high frequency of this special rate looks like a fixed price offering 
+from/to the airport. To verify this, the geo coordinates are checked to look 
+at the start and end point of the trips.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+library(ggmap)
+nyc.map = get_map(location = c(lon = -73.9, lat = 40.7), zoom = 11, 
+                  maptype = 'roadmap')
+nyc.MAP = ggmap(nyc.map)
+
+# subset of taxi trips that start or end beyond the -73.9 lon line 
+# (this is not exactly selecting the airport but JFK airport is on on side and 
+#  Manhattan is on the other side of the line)
+taxi50.from.ap = taxi50[taxi50$pickup.longitude > -73.9 & 
+                          taxi50$trip.distance > 15,]
+taxi50.to.ap   = taxi50[taxi50$dropoff.longitude > -73.9 & 
+                          taxi50$trip.distance > 15,]
+
+nyc.MAP + 
+  geom_point(data=taxi50.from.ap, aes(x=pickup.longitude,y=pickup.latitude), 
+             alpha=.1, color="red") + 
+  geom_point(data=taxi50.from.ap, aes(x=dropoff.longitude,y=dropoff.latitude), 
+             alpha=.1, color="blue") +
+  ggtitle("Taxi rides from Airport(red) to NCY(blue)")
+
+nyc.MAP + 
+  geom_point(data=taxi50.to.ap, aes(x=pickup.longitude,y=pickup.latitude), 
+             alpha=.1, color="red") + 
+  geom_point(data=taxi50.to.ap, aes(x=dropoff.longitude,y=dropoff.latitude), 
+             alpha=.1, color="blue") +
+  ggtitle("Taxi rides from NYC(red) to Airport(blue)")
+
+```
+
+The maps show that the special price trips start/end at the airport and 
+end/start in Manhattan.
+
+## Look at trips to Airport in more detail
+
+Arriving the airport in time is important. Therefore we look at the time it 
+takes to ride from the city of Manhattan to the airport.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi50.to.ap, aes(x=Hour, y=trip.time)) + 
+  geom_jitter(alpha=1, aes(color=weekend)) + 
+  geom_smooth(method="loess", aes(group=1)) +
+  ggtitle("Trip time to Aiport over hour of day") +
+  ylab("Trip time")
+
+```
+
+The trip time to the airport is dependent on the hour of the day. Around 4pm 
+in the afternoon it takes much longer than around 5am. The trip times on the 
+weekend are mostly below the fitting line, showing that it is easier to drive 
+to the airport on weekends.
+
+## Trying to predict the trip time to the airport
+
+As it is important to know how long it will take to drive to the airport a 
+prediction model is created. The model is not giving a good prediction 
+(R squared value below 0.35). The reason is the small dataset and the large 
+variance of the trip times on some hours of the day. The graph below shows 
+the distribution of trip times to the airport, the predicted trip times 
+(in blue) and the upper limit of the 99% confidence interval (in red).
+
+```{r}
+
+lm1 = lm(trip.time ~ Hour, data=taxi50.to.ap)
+summary(lm1)
+
+# build a test data set to predict (5am to 8pm on workdays)
+test=data.frame(Hour=factor(c(5:20),levels=c(5:20)), weekend="no")
+
+# do prediction on test data
+pred = predict(lm1, test, interval = c("confidence"), level = 0.99)
+pred = data.frame(pred)
+test$fit = pred$fit
+test$upr = pred$upr
+
+# show predicted data and upper limit for CI
+test
+
+```
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+# Plot data with predicted values and CI
+ggplot(data=subset(taxi50.to.ap, trip.distance > 15), 
+       aes(x=Hour, y=trip.time)) + 
+  geom_jitter(alpha=.8, color="orange") + 
+  ggtitle("Trip time to Aiport over hour of day") +
+  ylab("Trip time") + ylim(1000,4000) +
+  geom_line(data=test, aes(x=Hour, y=fit, group=1, color="Predicted")) +
+  geom_line(data=test, aes(x=Hour, y=upr, group=1, color="99% Confidence")) +
+  scale_colour_manual("Prediction", values=c("Predicted"="blue",
+                                             "99% Confidence"="red"))
+
+```
+
+## Looking at fare per mile and speed
+
+The taxi fare per mile and speed are distributed as expected. The mean fare 
+per mile is 5.87$ and the mean speed is 13.3 miles per hour. The histogram for 
+the fair per mile has a long tail. Cutting of the upper 0.01% of the data 
+gives a better overview of the distribution.
+
+```{r}
+
+# Subselecting taxi trips with distance and trip time > 0
+taxi0 = taxi[taxi$trip.distance>0 & taxi$trip.time>0,]
+
+# calculate new varaibles for fare.per.mile and speed 
+taxi0$fare.per.mile = taxi0$fare.amount/taxi0$trip.distance
+taxi0$speed = taxi0$trip.distance/taxi0$trip.time*3600
+
+# omit trips with speed too high
+taxi0 = taxi0[taxi0$speed < 100,]
+
+# distribution of new variables
+summary(taxi0$fare.per.mile)
+summary(taxi0$speed)
+
+```
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=speed)) + geom_histogram(binwidth=1) +
+  ggtitle("Distribution of speed") + 
+  scale_x_continuous(breaks=c(0,5,10,15,20,30,40,60), limit=c(0,60))
+
+ggplot(data=taxi0, aes(x=fare.per.mile)) + geom_histogram(binwidth=1) +
+  xlab("Fare per mile") + ggtitle("Distribution of fare per mile")
+
+ggplot(data=taxi0, aes(x=fare.per.mile)) + geom_histogram(binwidth=.5) +
+  coord_cartesian(xlim=c(0,quantile(taxi0$fare.per.mile,.99))) +
+  xlab("Fare per mile") + ggtitle("Distribution of fare per mile (lower 99%)")
+  
+```
+
+Comparing the fair per mile for workdays and weekends shows that the fare is 
+slightly higher for workdays. This might be due to the higher traffic compared 
+to the weekend.
+
+Looking at the speed per weekday you can see that the median speed for Sunday 
+is the highest and Friday has the lowest.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=weekend, y=fare.per.mile)) + geom_boxplot() +
+  coord_cartesian(ylim=c(0,quantile(taxi0$fare.per.mile,.95))) +
+  ggtitle("Comparison of taxi fare per mile for workdays vs. weekend") +
+  xlab("Is weekend?") + ylab("Fare per mile")
+
+ggplot(data=taxi0, aes(x=weekday, y=speed)) + geom_boxplot() +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  ggtitle("Comparison of Speed per workday")
+
+```
+
+Comparing the speed over the hour of day shows smaller number of taxi rides in 
+the early morning hours and the slowest speeds in the early afternoon. The 
+smoothed line for the mean of the speed visualizes the dependency of speed 
+from hour of day.
+
+Seperating the speed by weekend or workdays in a boxplot shows that nightly 
+trips on weekends (Saturday or Sunday morning) are slower than on worksdays.
+During daytime the speeds are faster on weekends than on workdays.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=Hour, y=speed)) + geom_jitter(alpha=0.1, 
+                                                       color="orange") +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  ggtitle("Comparison of Speed per hour of day")
+
+ggplot(data=taxi0, aes(x=Hour, y=speed)) + geom_jitter(alpha=0.1, 
+                                                       color="orange") +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  geom_smooth(aes(group=1)) +
+  ggtitle("Comparison of Speed per hour of day")
+
+ggplot(data=taxi0, aes(x=Hour, y=speed)) + 
+  geom_boxplot(aes(color=weekend),outlier.colour = "grey") +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  ggtitle("Comparison of Speed per hour of day")
+
+```
+
+## Looking at the influence of rain
+
+Before comparing taxi rides on weather data three plots visualize the weather 
+data. The temperature is shown as points and tiles whereas the rain is shown 
+as tiles only. There are some "holes", where no weather data is available, 
+because no taxi trips are in the sample at that point in time.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi, aes(x=pickup.date, y=Temperature)) + 
+  geom_jitter(alpha=.1, color="orange") + geom_smooth() +
+  ggtitle("Temperature") + xlab("Date")
+
+ggplot(data=taxi, aes(x=pickup.date, y=Hour, fill=Precipitation)) + 
+  geom_tile() +
+  scale_fill_gradientn(colours = colorRampPalette(c("white", "red"))(5)) + 
+  ggtitle("Rain per day and hour") + xlab("Date")
+
+ggplot(data=taxi, aes(x=pickup.date, y=Hour, fill=Temperature)) + geom_tile() +
+  scale_fill_gradientn(colours = colorRampPalette(c("blue", "red"))(5)) + 
+  ggtitle("Temperature per day and hour") + xlab("Date")
+
+```
+
+Comparing the speed of the taxis by rain visually gives no information. 
+Looking at the mean and median values, a small difference visible. Taxis are 
+slower and the fares are higher, when it is raining. Also, the trip distance 
+is shorter when it is raining, pointing at the fact that a taxi might be used 
+even for smaller distances.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=Hour, y=speed)) + geom_jitter(alpha=0.5, 
+                                                       aes(color=rain)) +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  ggtitle("Comparison of Speed per hour of day")
+
+```
+
+```{r}
+by(taxi0[,c("rain","speed","trip.distance","tip.amount")], taxi0$rain, summary)
+```
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=rain, y=speed)) + geom_boxplot() +
+  coord_cartesian(ylim=c(0,quantile(taxi0$speed,.95))) +
+  ggtitle("Comparison of Speed by Rain") + xlab("Is it raining?")
+
+ggplot(data=taxi0, aes(x=rain, y=fare.per.mile)) + geom_boxplot() +
+  coord_cartesian(ylim=c(0,quantile(taxi0$fare.per.mile,.95))) +
+  ggtitle("Comparison of Fare per mile by Rain") + 
+  xlab("Is it raining?") + ylab("Fare per mile")
+
+ggplot(data=taxi0, aes(x=rain, y=trip.distance)) + geom_boxplot() +
+  coord_cartesian(ylim=c(0,quantile(taxi0$trip.distance,.90))) +
+  ggtitle("Comparison of Trip distance by Rain") + 
+  xlab("Is it raining?") + ylab("Trip distance")
+
+
+```
+
+## Looking at tips
+
+The distribution of tips over trip distance shows that many people don't give 
+tips at all. For longer distances, the tips rises a little bit but on average 
+less than $1 a mile.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=subset(taxi0,tip.amount<10), 
+       aes(y=trip.distance, x=factor(tip.amount))) + 
+  geom_jitter(alpha=.1, color="orange") +
+  scale_y_continuous(breaks=(c(0:10,15,20)), limit=c(0,20)) +
+  geom_boxplot(aes(y=trip.distance,x=factor(tip.amount)),
+               color=I("#56B4E9"), 
+               outlier.colour="grey", outlier.size=0,
+               alpha=0) + 
+  coord_flip() +
+  ggtitle("Distribution of tips over trip distance") + 
+  xlab("Tip") + ylab("Trip distance")
+```
+
+Even more interesting is the fact that the mean tip is less for 3 or 4 
+passengers in a taxi than it is for 1, 2 or 5, and 6 passengers. I have no 
+idea what might be the cause of this fact.
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+by(taxi0[,c("tip.amount","passenger.count")], taxi0$passenger.count, summary)
+
+```
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi0, aes(x=passenger.count, y=tip.amount)) + 
+  geom_jitter(alpha=.2, color="orange") +
+  geom_line(stat="summary", fun.y=mean, aes(group=1, color="mean")) + 
+  coord_cartesian(ylim=c(0,5)) +
+  ggtitle("Comparison of Tip and Passenger count") + 
+  xlab("Passenger count") + ylab("Tip [$]") +
+  scale_colour_manual("", values=c("mean"="blue"))
+
+```
+
+# Final Plots and Summary
+
+## Plot 1
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi, aes(x=pickup.date,y=fare.amount)) + 
+  geom_point(alpha=0.1, color="orange", position="jitter") + ylim(0,100) + 
+  geom_line(data=taxi.per.day, (aes(x=pickup.date, 
+                                    y=fare.mean, color="mean"))) +
+  geom_line(data=taxi.per.day, (aes(x=pickup.date, 
+                                    y=fare.median, color="median"))) +
+  ggtitle("Trip fare per day") + xlab("Day") + ylab("Fare") + 
+  scale_colour_manual("Fare in $", values=c("mean"="blue",
+                                            "median"="red"))
+
+```
+
+## Description 1
+
+The distribution of fares over days shows that most trips are below $25 
+(the mean is $14.33). But a line above $50 stands out. A special fix price 
+offering to get from the city to the airport and backward might be the reason.
+
+## Plot 2
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=taxi50.to.ap, aes(x=Hour, y=trip.time)) + 
+  geom_jitter(alpha=1, aes(color=weekend)) + 
+  geom_smooth(method="loess", aes(group=1)) +
+  ggtitle("Trip time to Aiport over hour of day") +
+  ylab("Trip Time [seconds]")
+
+```
+
+## Description 2
+
+The trip time to the airport is dependent on the hour of the day. Around 4pm 
+in the afternoon it takes much longer than around 5am. The trip times on the 
+weekend are mostly below the fitting line, showing that it is easier to drive 
+to the airport on weekends.
+
+## Plot 3
+
+```{r echo=FALSE, error=FALSE, warning=FALSE}
+
+ggplot(data=subset(taxi0,tip.amount<10), 
+       aes(y=trip.distance, x=factor(tip.amount))) + 
+  geom_jitter(alpha=.1, color="orange") +
+  scale_y_continuous(breaks=(c(0:10,15,20)), limit=c(0,20)) +
+  geom_boxplot(aes(y=trip.distance,x=factor(tip.amount)),
+               color=I("#56B4E9"), 
+               outlier.colour="grey", outlier.size=0,
+               alpha=0) + 
+  coord_flip() +
+  ggtitle("Distribution of tips over trip distance") + 
+  xlab("Tip [$]") + ylab("Trip Distance [miles]")
+
+```
+
+## Description 3
+
+The distribution of tips over trip distance shows that many people don't give 
+tips at all. For longer distances, the tips rises a little bit but on average 
+less than $1 a mile.
+
+# Reflection
+
+The NYC Taxi data set contains a large amount of data. It has more than 10 
+million taxi trips per month. In this investigation just a small subset of the 
+trip data is analyzed (60.000 trips over 4 month). 
+
+I started by looking at the distribution of taxi trips over date and weekdays 
+but this gives not much information, as the distribution is almost even. 
+Looking at the taxi fares showed a special price and it turned out that going 
+from Manhattan to JFK airport or airport to Manhattan is the dominant taxi 
+trip behind this special rate. Looking into trip times from Manhattan to JFS 
+airport shows a strong dependency on hour of day. In the afternoon it takes 2x 
+more time to arrive at the airport. I created a prediction model for this but 
+the quality of this model was not very good based on the sample. It would be 
+interesting to create and test the model with the full data set. Another 
+interesting insight was that the mean tip amount is just around $1. As a 
+German I have expected much higher tips. It is also interesting that with 
+4 passengers in a taxi the mean of tips is the lowest.
+
+There are numerous relationships that are not investigated here. E.g. the 
+trip distance over time or the number of passengers compared by night or day 
+could be also interesting. Looking at the full data set would give additional 
+insights, that are not possible from the sample. E.g. it could be analyzed 
+how many taxis are on the street in a given time frame or how many passengers 
+each taxi has or how long taxis have to wait between customers.
